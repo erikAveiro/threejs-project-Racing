@@ -70,6 +70,8 @@ let driftCharge = 0;
 let boost = 0;
 let trackSamples = [];
 let lastTime = performance.now();
+let trackIndex = 0;
+const carRadius = 1.2;
 
 let keys = {};
 let started = false;
@@ -89,7 +91,7 @@ function init() {
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.BasicShadowMap;
   document.body.appendChild(renderer.domElement);
 
   // Licht
@@ -233,8 +235,8 @@ function createTrack() {
 
   trackSamples = [];
 
-  for (let i = 0; i <= 200; i++) {
-    const t = i / 200;
+  for (let i = 0; i <= 500; i++) {
+    const t = i / 500;
     trackSamples.push(trackCurve.getPoint(t));
   }
 
@@ -291,20 +293,32 @@ function Leitplanken(leftPoints, rightPoints) {
 
 //Kollisionspunkt finden
 function getNearestPointOnTrack(position) {
-  let nearestPoint = null;
-  let minDist = Infinity;
 
-  for (let i = 0; i < trackSamples.length; i++) {
+  let nearestPoint = trackSamples[trackIndex];
+  let minDist = position.distanceTo(nearestPoint);
+
+  for (let offset = -20; offset <= 20; offset++) {
+
+    let i =
+      (trackIndex + offset + trackSamples.length)
+      % trackSamples.length;
+
     const point = trackSamples[i];
-    const dist = point.distanceTo(position);
+
+    const dist =
+      position.distanceTo(point);
 
     if (dist < minDist) {
       minDist = dist;
       nearestPoint = point;
+      trackIndex = i;
     }
   }
 
-  return { nearestPoint, minDist };
+  return {
+    nearestPoint,
+    minDist
+  };
 }
 //Hütte
 function WoodCabin() {
@@ -356,7 +370,7 @@ function Trees() {
   const areaSize = 600;
   const minDistanceToTrack = 20;
 
-  for (let i = 0; i < 400; i++) {
+  for (let i = 0; i < 800; i++) {
 
     const x = (Math.random() - 0.5) * areaSize;
     const z = (Math.random() - 0.5) * areaSize;
@@ -534,10 +548,10 @@ function loadCar() {
 function updateCar(delta) {
   if (!car) return;
 
-  const accel = 0.009;
+  const accel = 0.005;
   const reverseAccel = 0.003;
   const friction = 0.96;
-  const turnSpeed = 0.14;
+  const turnSpeed = 0.18;
 
   const isDrifting = keys['shift'];
 
@@ -591,7 +605,7 @@ function updateCar(delta) {
   velocity.copy(forward.clone().multiplyScalar(forwardSpeed));
 }
 if (!isDrifting && driftCharge > 0.2) {
-  boost = driftCharge * 0.04;
+  boost = driftCharge * 0.007;
   driftCharge = 0;
 }
 
@@ -601,7 +615,6 @@ if (!isDrifting && driftCharge > 0.2) {
 
   // Bewegung
   velocity.add(forward.clone().multiplyScalar(boost));
-  boost *= 0.92;
   car.position.add(velocity);
   
   // Y fix
@@ -613,25 +626,29 @@ if (!isDrifting && driftCharge > 0.2) {
   // Kollision
   const { nearestPoint, minDist } = getNearestPointOnTrack(car.position);
 
-  if (minDist > trackWidth) {
+  if (minDist > trackWidth - carRadius) {
 
     const pushDir = new THREE.Vector3();
     pushDir.subVectors(car.position, nearestPoint);
     pushDir.normalize();
 
-    car.position.x = THREE.MathUtils.lerp(car.position.x, nearestPoint.x, 0.05);
-    car.position.z = THREE.MathUtils.lerp(car.position.z, nearestPoint.z, 0.05);
+    const allowedDist = trackWidth - carRadius;
 
-    car.position.add(pushDir.multiplyScalar(0.3));
+    const correction = pushDir.multiplyScalar(minDist - allowedDist);
 
-    velocity.multiplyScalar(0.7);
+    car.position.sub(correction);
+
+    // Geschwindigkeit abbremsen
+    velocity.projectOnPlane(pushDir);
+
+    velocity.multiplyScalar(0.5);
   }
 
   // Kamera
   const camOffset = new THREE.Vector3(0, 5, 12)
     .applyAxisAngle(new THREE.Vector3(0,1,0), direction);
 
-  camera.position.lerp(new THREE.Vector3(car.position.x + camOffset.x,car.position.y + camOffset.y,car.position.z + camOffset.z), 0.1);
+  camera.position.lerp(new THREE.Vector3(car.position.x + camOffset.x,car.position.y + camOffset.y,car.position.z + camOffset.z), 0.05);
 
   camera.lookAt(car.position);
 }
@@ -647,13 +664,21 @@ function checkLap() {
   }
 
   // Auto kommt zurück → neue Runde
-  if (distance < 5 && lapActive) {
-    Rundenzeit = (performance.now() - startTime) / 1000;
-    startTime = performance.now();
-    lapActive = false;
+ if (distance < 5 && lapActive) {
 
-    console.log("Neue Runde!");
+  const newTime = (performance.now() - startTime) / 1000;
+
+  lapActive = false;
+  startTime = performance.now();
+
+  Rundenzeit = newTime;
+
+  console.log("Neue Runde!", newTime);
+
+  if (newTime < Bestzeit) {
+    neueBestzeit(newTime);
   }
+}
 }
 
 // UI Zeit
