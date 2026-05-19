@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Rennspiel Advanced</title>
+
+<style>
+body { margin: 0; overflow: hidden; font-family: Arial; }
+
+#menu {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.85);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  color: white;
+}
+
+#ui {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  color: white;
+  font-size: 20px;
+  display: none;
+}
+
+button {
+  padding: 15px 30px;
+  font-size: 20px;
+  cursor: pointer;
+}
+</style>
+</head>
+
+<body>
+
+<div id="menu">
+  <h1>Rennspiel</h1>
+  <button id="startBtn">Start</button>
+</div>
+
+<div id="ui">
+  Zeit: <span id="time">0.00</span>s
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+let scene, camera, renderer;
+let car, trackCurve, trackWidth, cabin, Rundenzeit, canvas, context, ZeitTexture, DiagonalVektor, Display;
+let startPosition = new THREE.Vector3(-3, 0.75, -4);
+let lapActive = false;
+let velocity = new THREE.Vector3();
+let direction = 0;
+let driftCharge = 0;
+let boost = 0;
+
+let keys = {};
+let started = false;
+let carLoaded = false;
+
+let startTime = 0;
+let Bestzeit = 500
+
+init();
+
+function init() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87ceeb);
+
+  camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.appendChild(renderer.domElement);
+
+  // Licht
+  const light = new THREE.PointLight( 0xffaaaa, 1000000,0 );
+  light.position.set(300, 70, -50);
+  light.castShadow = true;
+  light.shadow.mapSize.width = 1024;
+  light.shadow.mapSize.height = 1024;
+  light.shadow.camera.near = 0.5;
+  light.shadow.camera.far = 500;
+  scene.add(light);
+
+  //Helper
+  //const helper = new THREE.CameraHelper(light.shadow.camera);
+  //scene.add(helper);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+
+  createGround();
+  createTrack();
+  Trees();
+  ZielEinfahrt();
+  WoodCabin();
+  BestzeitanzeigeSetUp();
+  loadCar();
+
+  window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+  window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+  animate();
+}
+
+// Boden
+function createGround() {
+  const geo = new THREE.PlaneGeometry(600, 600);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x013220 });
+  const ground = new THREE.Mesh(geo, mat);
+  ground.receiveShadow = true;
+  ground.rotation.x = -Math.PI / 2;
+  scene.add(ground);
+}
+
+// Strecke
+function createTrack() {
+
+  trackWidth = 6;
+  const segments = 200;
+
+  // Kontrollpunkte
+  const points = [
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -80),
+    new THREE.Vector3(-80, 0, -80),
+    new THREE.Vector3(-80, 0, -60),
+    new THREE.Vector3(-20, 0, -60),
+    new THREE.Vector3(-20, 0, -40),
+    new THREE.Vector3(-100, 0, -40),
+    new THREE.Vector3(-100, 0, -100),
+    new THREE.Vector3(0, 0, -100), 
+    new THREE.Vector3(40, 0, 0),
+  ];
+
+  const curve = new THREE.CatmullRomCurve3(points, true); // true = geschlossen
+
+  const leftPoints = [];
+  const rightPoints = [];
+
+  for (let i = 0; i <= segments; i++) {
+
+    const t = i / segments;
+
+    const point = curve.getPoint(t);
+    const tangent = curve.getTangent(t).normalize();
+
+    // Normale berechnen (links/rechts)
+    const normal = new THREE.Vector3(-tangent.z, 0, tangent.x);
+
+    leftPoints.push(new THREE.Vector3(point.x + normal.x * trackWidth,0.02,point.z + normal.z * trackWidth));
+
+    rightPoints.push(new THREE.Vector3(point.x - normal.x * trackWidth,0.02,point.z - normal.z * trackWidth));
+  }
+
+  // Geometrie bauen
+  const vertices = [];
+  const indices = [];
+  const uvs = [];
+
+  for (let i = 0; i < segments; i++) {
+
+    const a = leftPoints[i];
+    const b = rightPoints[i];
+    const c = leftPoints[i + 1];
+    const d = rightPoints[i + 1];
+
+    const index = vertices.length / 3;
+
+    vertices.push(a.x, a.y, a.z);
+    vertices.push(b.x, b.y, b.z);
+    vertices.push(c.x, c.y, c.z);
+    vertices.push(d.x, d.y, d.z);
+
+
+    const v = i / segments;
+    const vNext = (i + 1) / segments;
+
+    uvs.push(0, v);
+    uvs.push(1, v);
+    uvs.push(0, vNext);
+    uvs.push(1, vNext);
+
+
+    indices.push(index, index + 1, index + 2);
+    indices.push(index + 2, index + 1, index + 3);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
+  const loader = new THREE.TextureLoader();
+  const Asphalt_texture = loader.load("textures/Asphalt.jpg");
+  const Asphalt_texture_normal = loader.load("textures/Asphalt_ambient.png")
+
+  Asphalt_texture.colorSpace = THREE.SRGBColorSpace;
+  Asphalt_texture_normal.colorSpace = THREE.NoColorSpace;
+
+  Asphalt_texture.wrapS = THREE.RepeatWrapping;
+  Asphalt_texture.wrapT = THREE.RepeatWrapping;
+  Asphalt_texture.repeat.set(1, segments / 10);
+
+  const material = new THREE.MeshStandardMaterial({color: 0x2f2f2f,side: THREE.DoubleSide,map:Asphalt_texture,normalMap:Asphalt_texture_normal});
+  material.flatShading = true;
+
+  const track = new THREE.Mesh(geometry, material);
+  track.receiveShadow = true;
+  scene.add(track);
+
+
+  trackCurve = curve;
+  Leitplanken(leftPoints,rightPoints);
+}
+
+//Leitplanken
+function Leitplanken(leftPoints, rightPoints) {
+
+  const height = 1;
+  const thickness = 0.5;
+
+  const material = new THREE.MeshStandardMaterial({color: 0xaaaaaa,metalness: 0.8,roughness: 0.3});
+
+  function buildSide(points) {
+
+    for (let i = 0; i < points.length - 1; i++) {
+
+      const p1 = points[i];
+      const p2 = points[i + 1];
+
+      // Mittelpunkt des Segments
+      const mid = new THREE.Vector3();
+      mid.addVectors(p1, p2);
+      mid.multiplyScalar(0.5);
+
+      // Länge des Segments
+      const length = p1.distanceTo(p2);
+
+      // Box-Geometrie
+      const geometry = new THREE.BoxGeometry(thickness, height, length);
+
+      const mesh = new THREE.Mesh(geometry, material);
+
+      // Position
+      mesh.position.set(mid.x, height / 2, mid.z);
+
+      // Rotation entlang der Strecke
+      const angle = Math.atan2(p2.x - p1.x, p2.z - p1.z);
+      mesh.rotation.y = angle;
+
+      mesh.castShadow = true;
+      //mesh.receiveShadow = true;
+
+      scene.add(mesh);
+    }
+  }
+
+  buildSide(leftPoints);
+  buildSide(rightPoints);
+}
+
+//Kollisionspunkt finden
+function getNearestPointOnTrack(position) {
+
+  const divisions = 2000;
+  let nearestPoint = null;
+  let minDist = Infinity;
+
+  for (let i = 0; i <= divisions; i++) {
+    const t = i / divisions;
+    const point = trackCurve.getPoint(t);
+
+    const dist = point.distanceTo(position);
+
+    if (dist < minDist) {
+      minDist = dist;
+      nearestPoint = point;
+    }
+  }
+
+  return { nearestPoint, minDist };
+}
+
+//Hütte
+function WoodCabin() {
+  const loader = new GLTFLoader();
+  
+  loader.load("models/cabin.glb",function(gltf) {
+      cabin = gltf.scene;
+
+      cabin.scale.set (2,2,2);
+      cabin.position.set(1.8,2.1,-2);
+
+      cabin.traverse((child)=>{
+        if(child.isMesh){
+          child.castShadow = true;
+          child.receiveShadow = true;
+
+          child.material.side = THREE.FrontSide;
+        }
+      });
+      scene.add(cabin);
+  },
+  undefined,
+  (error) => {console.error("Fehler beim Laden der Cabin:", error);});
+}
+
+
+//Bäume
+function Trees() {
+
+  const loader = new THREE.TextureLoader();
+  const wood_texture = loader.load( "textures/Wood_Texture.jpg" );
+  const normal_wood_texture = loader.load( "textures/Wood_Texture_ambient.png" );
+  const blätter_werk = loader.load("textures/Blätterwerk.jpg");
+  const blätter_werk_normal = loader.load("textures/Blätterwerk_ambient.png");
+
+  wood_texture.colorSpace = THREE.SRGBColorSpace;
+  normal_wood_texture.colorSpace = THREE.NoColorSpace;
+  blätter_werk.colorSpace = THREE.SRGBColorSpace;
+  blätter_werk_normal.colorSpace = THREE.NoColorSpace;
+  
+  const trunkGeo = new THREE.CylinderGeometry(1, 2, 8.5);
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, map:wood_texture, normalMap: normal_wood_texture });
+
+  const leavesGeo = new THREE.ConeGeometry(7, 10, 50);
+  const leavesMat = new THREE.MeshStandardMaterial({ color: 0x0b6623, map:blätter_werk, normalMap:blätter_werk_normal });
+
+  
+
+  const areaSize = 600;
+  const minDistanceToTrack = 20;
+
+  for (let i = 0; i < 800; i++) {
+
+    const x = (Math.random() - 0.5) * areaSize;
+    const z = (Math.random() - 0.5) * areaSize;
+
+    const pos = new THREE.Vector3(x, 0, z);
+
+    // Abstand zur Strecke prüfen
+    const { minDist } = getNearestPointOnTrack(pos);
+
+    if (minDist < minDistanceToTrack) continue;
+
+    const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+    trunk.position.set(x, 4.25, z);
+
+    const leaves = new THREE.Mesh(leavesGeo, leavesMat);
+    leaves.position.set(x, 12, z);
+
+    const scale = 0.8 + Math.random() * 0.5;
+    trunk.scale.set(scale, scale, scale);
+    leaves.scale.set(scale, scale, scale);
+
+    trunk.castShadow = true;
+    leaves.castShadow = true;
+    trunk.receiveShadow = true;
+    leaves.receiveShadow = true;
+
+    scene.add(trunk);
+    scene.add(leaves);
+  }
+}
+
+//ZielEinfahrt
+function ZielEinfahrt(){
+  const StangenMaterial = new THREE.MeshStandardMaterial({color:0xffff00,});
+  const StangenGeo = new THREE.CylinderGeometry(0.2,0.2,10,50);
+
+  const Stangelinks = new THREE.Mesh(StangenGeo,StangenMaterial);
+  const Stangerechts = new THREE.Mesh(StangenGeo,StangenMaterial);
+
+  Stangelinks.position.set(-8.3,5,-4);
+  Stangerechts.position.set(4.5,5,-4);
+  Stangelinks.receiveShadow = true;
+  Stangerechts.receiveShadow = true;
+  Stangelinks.castShadow = true,
+  Stangerechts.castShadow = true;
+
+  scene.add(Stangelinks);
+  scene.add(Stangerechts);
+
+  
+  const ZielGeometry = new THREE.BoxGeometry(1,1,1);
+  let color;
+  let colorswitch = false;
+  
+  for(let i = 0; i<14;i++){
+    for(let f = 0; f<4;f++){
+      if(colorswitch){
+        color = 0x000000;
+      }
+      else{
+        color = 0xffffff;
+      }
+      const ZielMaterial = new THREE.MeshStandardMaterial({color: color});
+      
+      const ZielMesh = new THREE.Mesh(ZielGeometry,ZielMaterial);
+      ZielMesh.position.set(i-8.3,f+6,-4);
+      ZielMesh.receiveShadow =true;
+      ZielMesh.castShadow =true;
+
+
+      scene.add(ZielMesh);
+
+      colorswitch = !colorswitch;
+    }
+    colorswitch = !colorswitch;
+  }
+
+}
+
+//Bestzeitanzeige
+function BestzeitanzeigeSetUp(){
+  const StützenMaterial = new THREE.MeshStandardMaterial({color:0xff0000});
+  const StützenGeo = new THREE.CylinderGeometry(0.2,0.2,2,50);
+
+  const Stützelinks = new THREE.Mesh(StützenGeo,StützenMaterial);
+  const Stützerechts = new THREE.Mesh(StützenGeo,StützenMaterial);
+
+  Stützelinks.position.set(-15,0.9,-27);
+  Stützerechts.position.set(-12,0.9,-30);
+
+  scene.add(Stützelinks);
+  scene.add(Stützerechts);
+
+  canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 256;
+
+  context = canvas.getContext("2d");
+
+  ZeitTexture = new THREE.CanvasTexture(canvas);
+
+  const TafelmaterialInnen = new THREE.MeshStandardMaterial({color:0x000000});
+  const TafelGeoInnen = new THREE.BoxGeometry(Math.sqrt(18),3,1); //Abstzand zwischen Stützen ist sqrt(18)
+
+  const Tafelanzeige = new THREE.Mesh(TafelGeoInnen,TafelmaterialInnen);
+
+  DiagonalVektor = new THREE.Vector3(-1,0,1); //für richtige Rotation
+  
+  Tafelanzeige.rotateY(Math.PI/4);
+  Tafelanzeige.rotateOnWorldAxis(DiagonalVektor,Math.PI/7);
+  Tafelanzeige.position.set(-13.5,1.5,-28.5);
+
+  scene.add(Tafelanzeige);
+
+  //Display
+  const material = new THREE.MeshStandardMaterial({ map: ZeitTexture });
+  const geometry = new THREE.PlaneGeometry(Math.sqrt(18), 3);
+
+  Display = new THREE.Mesh(geometry, material);
+
+  Display.receiveShadow = true;
+  Display.rotateY(Math.PI/4);
+  Display.rotateOnWorldAxis(DiagonalVektor,Math.PI/7);
+  Display.position.set(-13.17, 1.75, -28.17);
+
+  const TafelmaterialAußen = new THREE.MeshStandardMaterial({color:0xffff00});
+  const TafelGeoAußen = new THREE.BoxGeometry(Math.sqrt(18)+0.3,3.3,0.9);
+
+  const Tafelumrandung = new THREE.Mesh(TafelGeoAußen,TafelmaterialAußen);
+
+  Tafelumrandung.rotateY(Math.PI/4);
+  Tafelumrandung.rotateOnWorldAxis(DiagonalVektor,Math.PI/7);
+  Tafelumrandung.position.set(-13.5,1.5,-28.5);
+
+  scene.add(Tafelumrandung);
+}
+
+
+//Auto
+function loadCar() {
+  const loader = new GLTFLoader();
+  
+
+  loader.load("models/cartoon_car.glb",function(gltf) {
+      car = gltf.scene;
+
+      car.scale.set(0.14, 0.14, 0.14);
+      car.position.set(-3, 0.75, -4);
+      car.position.copy(startPosition);
+      car.traverse((child)=>{
+        if(child.isMesh){
+          child.castShadow = true;
+          child.receiveShadow = true;
+
+          child.material.side = THREE.FrontSide;
+        }
+      });
+
+      scene.add(car);
+
+      carLoaded = true;
+      console.log("Auto geladen");
+    },
+    undefined,
+    (error) => {console.error("Fehler beim Laden des Autos:", error);}
+  );
+}
+
+//Physik
+function updateCar() {
+  if (!car) return;
+
+  const accel = 0.006;
+  const reverseAccel = 0.003;
+  const friction = 0.96;
+  const turnSpeed = 0.06;
+
+  const isDrifting = keys['shift'];
+
+  const forward = new THREE.Vector3(0, 0, -1);
+  forward.applyAxisAngle(new THREE.Vector3(0,1,0), direction);
+
+  const right = new THREE.Vector3(-forward.z, 0, forward.x);
+
+  const speed = velocity.length();
+
+  // Beschleunigung
+  if (keys['w']) {
+    velocity.add(forward.clone().multiplyScalar(accel));
+  }
+
+  if (keys['s']) {
+    velocity.add(forward.clone().multiplyScalar(-reverseAccel));
+  }
+
+   const driftTurnMultiplier = isDrifting ? 1.7 : 1;
+  //Kein Drehen im Stand
+  if (speed > 0.05) {
+    if (keys['a']) direction += turnSpeed * speed * driftTurnMultiplier;
+    if (keys['d']) direction -= turnSpeed * speed * driftTurnMultiplier;
+  }
+
+  if (isDrifting && speed > 0.05 && (keys['a'] || keys['d'])) {
+    driftCharge += 0.002;
+    driftCharge = Math.min(driftCharge, 1);
+  //seitliche Driftkraft
+  if (keys['a']) {
+    velocity.add(right.clone().multiplyScalar(0.015 * speed));
+  }
+  if (keys['d']) {
+    velocity.add(right.clone().multiplyScalar(-0.015 * speed));
+  }
+
+  // Drift + Grip
+  const forwardSpeed = velocity.dot(forward);
+  const sideSpeed = velocity.dot(right);
+
+  const driftFactor = 0.9;   // weniger = mehr Drift
+
+  velocity.copy(forward.clone().multiplyScalar(forwardSpeed));
+
+  velocity.add(right.clone().multiplyScalar(sideSpeed * driftFactor));
+
+} else {
+  // normaler Grip
+  const forwardSpeed = velocity.dot(forward);
+  velocity.copy(forward.clone().multiplyScalar(forwardSpeed));
+}
+if (!isDrifting && driftCharge > 0.2) {
+  boost = driftCharge * 0.08;
+  driftCharge = 0;
+}
+
+  // Reibung
+  velocity.multiplyScalar(friction);
+
+  // Bewegung
+  velocity.add(forward.clone().multiplyScalar(boost));
+  boost *= 0.92;
+  car.position.add(velocity);
+  
+  // Y fix
+  car.position.y = 0.75;
+
+  // Rotation
+  car.rotation.y = direction;
+
+  // Kollision
+  const { nearestPoint, minDist } = getNearestPointOnTrack(car.position);
+
+  if (minDist > trackWidth) {
+
+    const pushDir = new THREE.Vector3();
+    pushDir.subVectors(car.position, nearestPoint);
+    pushDir.normalize();
+
+    car.position.x = THREE.MathUtils.lerp(car.position.x, nearestPoint.x, 0.05);
+    car.position.z = THREE.MathUtils.lerp(car.position.z, nearestPoint.z, 0.05);
+
+    car.position.add(pushDir.multiplyScalar(0.3));
+
+    velocity.multiplyScalar(0.7);
+  }
+
+  // Kamera
+  const camOffset = new THREE.Vector3(0, 5, 12)
+    .applyAxisAngle(new THREE.Vector3(0,1,0), direction);
+
+  camera.position.lerp(new THREE.Vector3(car.position.x + camOffset.x,car.position.y + camOffset.y,car.position.z + camOffset.z), 0.1);
+
+  camera.lookAt(car.position);
+}
+
+function checkLap() {
+  if (!car) return;
+
+  const distance = car.position.distanceTo(startPosition);
+
+  // Auto entfernt sich vom Start
+  if (distance > 20) {
+    lapActive = true;
+  }
+
+  // Auto kommt zurück → neue Runde
+  if (distance < 5 && lapActive) {
+    Rundenzeit = (performance.now() - startTime) / 1000;
+    startTime = performance.now();
+    lapActive = false;
+
+    console.log("Neue Runde!");
+  }
+}
+
+// UI Zeit
+function updateUI() {
+  const t = (performance.now() - startTime) / 1000;
+  document.getElementById("time").innerText = t.toFixed(2);
+}
+
+//Bestzeit schreiben
+function BestzeitSchreiben(text){
+  context .fillStyle = "black";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "white";
+  context.font = "bold 60px Arial";
+  context.textAlign = "center";
+  
+  context.fillText("BESTZEIT:", canvas.width / 2, (canvas.height / 2) -50);
+  context.fillText(text +" s", canvas.width / 2, (canvas.height / 2) +30);
+ 
+
+  ZeitTexture.needsUpdate = true;
+}
+
+function neueBestzeit(time){
+  
+  BestzeitSchreiben(time.toFixed(2));
+  Bestzeit = time.toFixed(2);
+
+  scene.add(Display);
+}
+
+
+
+//Loooooooop
+function animate() {
+  requestAnimationFrame(animate);
+
+  if (!car) {
+  console.log("Auto noch nicht geladen...");
+  } 
+
+  if (started) {
+    updateCar();
+    updateUI();
+    checkLap();
+    if(Bestzeit > Rundenzeit ){
+      neueBestzeit(Rundenzeit);
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+
+//Start
+document.getElementById("startBtn").onclick = () => {
+  
+   if (!carLoaded) {
+    
+    alert("Auto lädt noch, bitte kurz warten...");
+    return;
+  }
+
+  started = true;
+  startTime = performance.now();
+
+  document.getElementById("menu").style.display = "none";
+  document.getElementById("ui").style.display = "block";
+};
+</script>
+</body>
+</html>
