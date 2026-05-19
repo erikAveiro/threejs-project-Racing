@@ -68,6 +68,8 @@ let velocity = new THREE.Vector3();
 let direction = 0;
 let driftCharge = 0;
 let boost = 0;
+let trackSamples = [];
+let lastTime = performance.now();
 
 let keys = {};
 let started = false;
@@ -134,7 +136,7 @@ function createGround() {
 function createTrack() {
 
   trackWidth = 6;
-  const segments = 200;
+  const segments = 80;
 
   // Kontrollpunkte
   const points = [
@@ -151,6 +153,8 @@ function createTrack() {
   ];
 
   const curve = new THREE.CatmullRomCurve3(points, true); // true = geschlossen
+
+  trackCurve = curve;
 
   const leftPoints = [];
   const rightPoints = [];
@@ -227,8 +231,15 @@ function createTrack() {
   track.receiveShadow = true;
   scene.add(track);
 
+  trackSamples = [];
 
-  trackCurve = curve;
+  for (let i = 0; i <= 200; i++) {
+    const t = i / 200;
+    trackSamples.push(trackCurve.getPoint(t));
+  }
+
+
+  
   Leitplanken(leftPoints,rightPoints);
 }
 
@@ -280,15 +291,11 @@ function Leitplanken(leftPoints, rightPoints) {
 
 //Kollisionspunkt finden
 function getNearestPointOnTrack(position) {
-
-  const divisions = 2000;
   let nearestPoint = null;
   let minDist = Infinity;
 
-  for (let i = 0; i <= divisions; i++) {
-    const t = i / divisions;
-    const point = trackCurve.getPoint(t);
-
+  for (let i = 0; i < trackSamples.length; i++) {
+    const point = trackSamples[i];
     const dist = point.distanceTo(position);
 
     if (dist < minDist) {
@@ -299,7 +306,6 @@ function getNearestPointOnTrack(position) {
 
   return { nearestPoint, minDist };
 }
-
 //Hütte
 function WoodCabin() {
   const loader = new GLTFLoader();
@@ -350,7 +356,7 @@ function Trees() {
   const areaSize = 600;
   const minDistanceToTrack = 20;
 
-  for (let i = 0; i < 800; i++) {
+  for (let i = 0; i < 400; i++) {
 
     const x = (Math.random() - 0.5) * areaSize;
     const z = (Math.random() - 0.5) * areaSize;
@@ -358,7 +364,12 @@ function Trees() {
     const pos = new THREE.Vector3(x, 0, z);
 
     // Abstand zur Strecke prüfen
-    const { minDist } = getNearestPointOnTrack(pos);
+    let minDist = Infinity;
+
+  for (let i = 0; i < trackSamples.length; i++) {
+      const d = trackSamples[i].distanceTo(pos);
+      if (d < minDist) minDist = d;
+  }
 
     if (minDist < minDistanceToTrack) continue;
 
@@ -520,13 +531,13 @@ function loadCar() {
 }
 
 //Physik
-function updateCar() {
+function updateCar(delta) {
   if (!car) return;
 
-  const accel = 0.006;
+  const accel = 0.009;
   const reverseAccel = 0.003;
   const friction = 0.96;
-  const turnSpeed = 0.06;
+  const turnSpeed = 0.14;
 
   const isDrifting = keys['shift'];
 
@@ -539,18 +550,18 @@ function updateCar() {
 
   // Beschleunigung
   if (keys['w']) {
-    velocity.add(forward.clone().multiplyScalar(accel));
+    velocity.add(forward.clone().multiplyScalar(accel * delta));
   }
 
   if (keys['s']) {
-    velocity.add(forward.clone().multiplyScalar(-reverseAccel));
+    velocity.add(forward.clone().multiplyScalar(-reverseAccel * delta));
   }
 
    const driftTurnMultiplier = isDrifting ? 1.7 : 1;
   //Kein Drehen im Stand
   if (speed > 0.05) {
-    if (keys['a']) direction += turnSpeed * speed * driftTurnMultiplier;
-    if (keys['d']) direction -= turnSpeed * speed * driftTurnMultiplier;
+    if (keys['a']) direction += turnSpeed * speed * driftTurnMultiplier * delta;
+    if (keys['d']) direction -= turnSpeed * speed * driftTurnMultiplier * delta;
   }
 
   if (isDrifting && speed > 0.05 && (keys['a'] || keys['d'])) {
@@ -558,10 +569,10 @@ function updateCar() {
     driftCharge = Math.min(driftCharge, 1);
   //seitliche Driftkraft
   if (keys['a']) {
-    velocity.add(right.clone().multiplyScalar(0.015 * speed));
+    velocity.add(right.clone().multiplyScalar(0.015 * speed * delta));
   }
   if (keys['d']) {
-    velocity.add(right.clone().multiplyScalar(-0.015 * speed));
+    velocity.add(right.clone().multiplyScalar(-0.015 * speed * delta));
   }
 
   // Drift + Grip
@@ -580,12 +591,13 @@ function updateCar() {
   velocity.copy(forward.clone().multiplyScalar(forwardSpeed));
 }
 if (!isDrifting && driftCharge > 0.2) {
-  boost = driftCharge * 0.08;
+  boost = driftCharge * 0.04;
   driftCharge = 0;
 }
 
   // Reibung
-  velocity.multiplyScalar(friction);
+  velocity.multiplyScalar(Math.pow(friction, delta));
+  boost *= Math.pow(0.92, delta);
 
   // Bewegung
   velocity.add(forward.clone().multiplyScalar(boost));
@@ -679,17 +691,14 @@ function neueBestzeit(time){
 function animate() {
   requestAnimationFrame(animate);
 
-  if (!car) {
-  console.log("Auto noch nicht geladen...");
-  } 
+  const now = performance.now();
+  const delta = (now - lastTime) / 16.666; // 60fps norm
+  lastTime = now;
 
   if (started) {
-    updateCar();
+    updateCar(delta);
     updateUI();
     checkLap();
-    if(Bestzeit > Rundenzeit ){
-      neueBestzeit(Rundenzeit);
-    }
   }
 
   renderer.render(scene, camera);
