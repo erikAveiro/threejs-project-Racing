@@ -227,7 +227,7 @@ function createTrack() {
   Asphalt_texture.repeat.set(1, segments / 10);
 
   const material = new THREE.MeshStandardMaterial({color: 0x2f2f2f,side: THREE.DoubleSide,map:Asphalt_texture,normalMap:Asphalt_texture_normal});
-  material.flatShading = true;
+  //material.flatShading = true;
 
   const track = new THREE.Mesh(geometry, material);
   track.receiveShadow = true;
@@ -239,8 +239,6 @@ function createTrack() {
     const t = i / 500;
     trackSamples.push(trackCurve.getPoint(t));
   }
-
-
   
   Leitplanken(leftPoints,rightPoints);
 }
@@ -645,8 +643,8 @@ if (!isDrifting && driftCharge > 0.2) {
   }
 
   // Kamera
-  const camOffset = new THREE.Vector3(0, 5, 12)
-    .applyAxisAngle(new THREE.Vector3(0,1,0), direction);
+  const camOffset = new THREE.Vector3(0, 5, 12);
+  camOffset.applyAxisAngle(new THREE.Vector3(0,1,0), direction);
 
   camera.position.lerp(new THREE.Vector3(car.position.x + camOffset.x,car.position.y + camOffset.y,car.position.z + camOffset.z), 0.05);
 
@@ -689,7 +687,7 @@ function updateUI() {
 
 //Bestzeit schreiben
 function BestzeitSchreiben(text){
-  context .fillStyle = "black";
+  context.fillStyle = "black";
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = "white";
   context.font = "bold 60px Arial";
@@ -697,7 +695,6 @@ function BestzeitSchreiben(text){
   
   context.fillText("BESTZEIT:", canvas.width / 2, (canvas.height / 2) -50);
   context.fillText(text +" s", canvas.width / 2, (canvas.height / 2) +30);
- 
 
   ZeitTexture.needsUpdate = true;
 }
