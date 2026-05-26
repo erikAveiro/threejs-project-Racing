@@ -50,8 +50,8 @@ button {
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.160/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160/examples/jsm/"
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184/examples/jsm/"
   }
 }
 </script>
@@ -79,6 +79,9 @@ let carLoaded = false;
 
 let startTime = 0;
 let Bestzeit = 500
+
+
+
 
 init();
 
@@ -358,51 +361,86 @@ function Trees() {
   blätter_werk_normal.colorSpace = THREE.NoColorSpace;
   
   const trunkGeo = new THREE.CylinderGeometry(1, 2, 8.5);
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, map:wood_texture, normalMap: normal_wood_texture });
+  const trunkMat = new THREE.MeshStandardMaterial();
 
   const leavesGeo = new THREE.ConeGeometry(7, 10, 50);
-  const leavesMat = new THREE.MeshStandardMaterial({ color: 0x0b6623, map:blätter_werk, normalMap:blätter_werk_normal });
+  const leavesMat = new THREE.MeshStandardMaterial();
 
-  
+  const maxTrees = 800;
+
+  const trunks = new THREE.InstancedMesh(trunkGeo,trunkMat,maxTrees);
+
+  const leaves = new THREE.InstancedMesh(leavesGeo,leavesMat,maxTrees);
+
+  trunks.castShadow = true;
+  trunks.receiveShadow = true;
+
+  leaves.castShadow = true;
+  leaves.receiveShadow = true;
 
   const areaSize = 600;
   const minDistanceToTrack = 20;
 
-  for (let i = 0; i < 800; i++) {
+  const dummy = new THREE.Object3D();
+
+  let treeCount = 0;
+
+  for (let i = 0; i < maxTrees; i++) {
 
     const x = (Math.random() - 0.5) * areaSize;
     const z = (Math.random() - 0.5) * areaSize;
 
     const pos = new THREE.Vector3(x, 0, z);
 
-    // Abstand zur Strecke prüfen
     let minDist = Infinity;
 
-  for (let i = 0; i < trackSamples.length; i++) {
-      const d = trackSamples[i].distanceTo(pos);
-      if (d < minDist) minDist = d;
-  }
+    for (let j = 0; j < trackSamples.length; j++) {
+      const d = trackSamples[j].distanceTo(pos);
+
+      if (d < minDist) {
+        minDist = d;
+      }
+    }
 
     if (minDist < minDistanceToTrack) continue;
 
-    const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-    trunk.position.set(x, 4.25, z);
-
-    const leaves = new THREE.Mesh(leavesGeo, leavesMat);
-    leaves.position.set(x, 12, z);
-
     const scale = 0.8 + Math.random() * 0.5;
-    trunk.scale.set(scale, scale, scale);
-    leaves.scale.set(scale, scale, scale);
 
-    trunk.castShadow = true;
-    leaves.castShadow = true;
-    trunk.receiveShadow = true;
-    leaves.receiveShadow = true;
+    // Stamm
+    dummy.position.set(x, 4.25 * scale, z);
+    dummy.scale.set(scale, scale, scale);
+    dummy.updateMatrix();
 
-    scene.add(trunk);
-    scene.add(leaves);
+    trunks.setMatrixAt(treeCount, dummy.matrix);
+
+    // Blätter
+    dummy.position.set(x, 12 * scale, z);
+    dummy.scale.set(scale, scale, scale);
+    dummy.updateMatrix();
+
+    leaves.setMatrixAt(treeCount, dummy.matrix);
+
+    treeCount++;
   }
+
+  trunks.count = treeCount;
+  leaves.count = treeCount;
+
+  trunks.instanceMatrix.needsUpdate = true;
+  leaves.instanceMatrix.needsUpdate = true;
+
+  trunks.material.color.set(0x8b5a2b);
+  trunks.material.map = wood_texture;
+  trunks.material.normalMap = normal_wood_texture;
+  trunks.material.needsUpdate = true;
+
+  leaves.material.color.set(0x0b6623);
+  leaves.material.map = blätter_werk;
+  leaves.material.normalMap = blätter_werk_normal;
+  leaves.material.needsUpdate = true;
+
+  scene.add(trunks);
+  scene.add(leaves);
 }
 
 //ZielEinfahrt
@@ -542,6 +580,13 @@ function loadCar() {
   );
 }
 
+
+const buffervectorCar = new THREE.Vector3();
+const buffervectorCam = new THREE.Vector3();
+const right = new THREE.Vector3();
+const camOffset = new THREE.Vector3();
+const positionLerp = new THREE.Vector3();
+const forward = new THREE.Vector3();
 //Physik
 function updateCar(delta) {
   if (!car) return;
@@ -553,10 +598,10 @@ function updateCar(delta) {
 
   const isDrifting = keys['shift'];
 
-  const forward = new THREE.Vector3(0, 0, -1);
-  forward.applyAxisAngle(new THREE.Vector3(0,1,0), direction);
+  forward.set(0, 0, -1);
+  forward.applyAxisAngle(buffervectorCar.set(0,1,0), direction);
 
-  const right = new THREE.Vector3(-forward.z, 0, forward.x);
+  right.set(-forward.z, 0, forward.x);
 
   const speed = velocity.length();
 
@@ -643,10 +688,10 @@ if (!isDrifting && driftCharge > 0.2) {
   }
 
   // Kamera
-  const camOffset = new THREE.Vector3(0, 5, 12);
-  camOffset.applyAxisAngle(new THREE.Vector3(0,1,0), direction);
+  camOffset.set(0, 5, 12);
+  camOffset.applyAxisAngle(buffervectorCam.set(0,1,0), direction);
 
-  camera.position.lerp(new THREE.Vector3(car.position.x + camOffset.x,car.position.y + camOffset.y,car.position.z + camOffset.z), 0.05);
+  camera.position.lerp(positionLerp.set(car.position.x + camOffset.x,car.position.y + camOffset.y,car.position.z + camOffset.z), 0.05);
 
   camera.lookAt(car.position);
 }
