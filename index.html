@@ -7,6 +7,19 @@
 <style>
 body { margin: 0; overflow: hidden; font-family: Arial; }
 
+#controlsUI {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  color: white;
+  font-size: 16px;
+  background: rgba(0,0,0,0.6);
+  padding: 12px 16px;
+  border-radius: 10px;
+  display: none;
+  line-height: 1.6;
+}
+
 #menu {
   position: absolute;
   width: 100%;
@@ -28,6 +41,8 @@ body { margin: 0; overflow: hidden; font-family: Arial; }
   display: none;
 }
 
+
+
 button {
   padding: 15px 30px;
   font-size: 20px;
@@ -37,6 +52,8 @@ button {
 </head>
 
 <body>
+
+<div id="controlsUI"></div>
 
 <div id="menu">
   <h1>Rennspiel</h1>
@@ -98,20 +115,41 @@ function init() {
   document.body.appendChild(renderer.domElement);
 
   // Licht
-  const light = new THREE.PointLight( 0xffaaaa, 1000000,0 );
-  light.position.set(300, 70, -50);
+  const light =
+  new THREE.DirectionalLight(0xffaaaa,2.5);
+
+  light.position.set(300,70,-50);
+
+  // Mittelpunkt der Szene
+  light.target.position.set(-30,0,-50);
+
+  scene.add(light.target);
+
   light.castShadow = true;
+
+  // Schattenqualität
   light.shadow.mapSize.width = 1024;
   light.shadow.mapSize.height = 1024;
-  light.shadow.camera.near = 0.5;
+
+  // Schattenbereich
+  light.shadow.camera.left = -180;
+  light.shadow.camera.right = 180;
+  light.shadow.camera.top = 180;
+  light.shadow.camera.bottom = -180;
+  light.shadow.camera.near = 1;
   light.shadow.camera.far = 500;
+  // Schattenfehler reduzieren
+  light.shadow.bias = -0.0002;
+
   scene.add(light);
+  // Umgebungslicht etwas wärmer
+  scene.add(new THREE.AmbientLight(0xfff4e0,0.45));
 
   //Helper
   //const helper = new THREE.CameraHelper(light.shadow.camera);
   //scene.add(helper);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+  //scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
   createGround();
   createTrack();
@@ -246,6 +284,7 @@ function createTrack() {
   Leitplanken(leftPoints,rightPoints);
 }
 
+
 //Leitplanken
 function Leitplanken(leftPoints, rightPoints) {
 
@@ -254,73 +293,95 @@ function Leitplanken(leftPoints, rightPoints) {
 
   const material = new THREE.MeshStandardMaterial({color: 0xaaaaaa,metalness: 0.8,roughness: 0.3});
 
+  const segmentCount = (leftPoints.length - 1) + (rightPoints.length - 1);
+
+  // Einheitliche Geometrie
+  const geometry = new THREE.BoxGeometry(thickness,height,1);
+
+  const guardrail = new THREE.InstancedMesh(geometry,material,segmentCount);
+
+  guardrail.castShadow = true;
+
+  const dummy = new THREE.Object3D();
+
+  let index = 0;
+
   function buildSide(points) {
 
-    for (let i = 0; i < points.length - 1; i++) {
+    for (let i = 0;i < points.length - 1;i++) {
 
       const p1 = points[i];
       const p2 = points[i + 1];
 
-      // Mittelpunkt des Segments
-      const mid = new THREE.Vector3();
-      mid.addVectors(p1, p2);
-      mid.multiplyScalar(0.5);
+      // Mittelpunkt
+      dummy.position.copy(p1);
+      dummy.position.add(p2);
+      dummy.position.multiplyScalar(0.5);
 
-      // Länge des Segments
+      dummy.position.y = height / 2;
+      // Länge
       const length = p1.distanceTo(p2);
 
-      // Box-Geometrie
-      const geometry = new THREE.BoxGeometry(thickness, height, length);
+      // Rotation
+      dummy.rotation.set(0,Math.atan2(p2.x - p1.x,p2.z - p1.z),0 );
 
-      const mesh = new THREE.Mesh(geometry, material);
+      // Skalierung
+      dummy.scale.set(1,1,length);
+      dummy.updateMatrix();
+      guardrail.setMatrixAt(index,dummy.matrix);
 
-      // Position
-      mesh.position.set(mid.x, height / 2, mid.z);
-
-      // Rotation entlang der Strecke
-      const angle = Math.atan2(p2.x - p1.x, p2.z - p1.z);
-      mesh.rotation.y = angle;
-
-      mesh.castShadow = true;
-      //mesh.receiveShadow = true;
-
-      scene.add(mesh);
+      index++;
     }
   }
 
   buildSide(leftPoints);
+
   buildSide(rightPoints);
+
+  guardrail.count = index;
+
+  guardrail.instanceMatrix
+    .needsUpdate = true;
+
+  scene.add(guardrail);
 }
 
 //Kollisionspunkt finden
 function getNearestPointOnTrack(position) {
 
+  const len = trackSamples.length;
+
   let nearestPoint = trackSamples[trackIndex];
-  let minDist = position.distanceTo(nearestPoint);
+  let minDist = Infinity;
 
-  for (let offset = -20; offset <= 20; offset++) {
+  const range = 6;
 
-    let i =
-      (trackIndex + offset + trackSamples.length)
-      % trackSamples.length;
+  let bestIndex = trackIndex;
 
+  for (let offset = -range; offset <= range; offset++) {
+
+    const i = (trackIndex + offset + len) % len;
     const point = trackSamples[i];
 
-    const dist =
-      position.distanceTo(point);
+    const dx = position.x - point.x;
+    const dz = position.z - point.z;
+    const dist = dx * dx + dz * dz;
 
     if (dist < minDist) {
       minDist = dist;
       nearestPoint = point;
-      trackIndex = i;
+      bestIndex = i;
     }
   }
 
+  trackIndex = bestIndex;
+
   return {
     nearestPoint,
-    minDist
+    minDist: Math.sqrt(minDist)
   };
 }
+
 //Hütte
 function WoodCabin() {
   const loader = new GLTFLoader();
@@ -363,7 +424,7 @@ function Trees() {
   const trunkGeo = new THREE.CylinderGeometry(1, 2, 8.5);
   const trunkMat = new THREE.MeshStandardMaterial();
 
-  const leavesGeo = new THREE.ConeGeometry(7, 10, 50);
+  const leavesGeo = new THREE.ConeGeometry(7, 10, 20);
   const leavesMat = new THREE.MeshStandardMaterial();
 
   const maxTrees = 800;
@@ -379,7 +440,7 @@ function Trees() {
   leaves.receiveShadow = true;
 
   const areaSize = 600;
-  const minDistanceToTrack = 20;
+  const minDistanceToTrack = 400;
 
   const dummy = new THREE.Object3D();
 
@@ -390,16 +451,19 @@ function Trees() {
     const x = (Math.random() - 0.5) * areaSize;
     const z = (Math.random() - 0.5) * areaSize;
 
-    const pos = new THREE.Vector3(x, 0, z);
+    dummy.position.set(x, 0, z);
+    const pos = dummy.position;
 
     let minDist = Infinity;
 
-    for (let j = 0; j < trackSamples.length; j++) {
-      const d = trackSamples[j].distanceTo(pos);
+    for (let j = 0; j < trackSamples.length; j += 5) {
 
-      if (d < minDist) {
-        minDist = d;
-      }
+      const dx = trackSamples[j].x - pos.x;
+      const dz = trackSamples[j].z - pos.z;
+
+      const d = dx * dx + dz * dz;
+
+      if (d < minDist) {minDist = d;}
     }
 
     if (minDist < minDistanceToTrack) continue;
@@ -558,7 +622,7 @@ function loadCar() {
   loader.load("models/cartoon_car.glb",function(gltf) {
       car = gltf.scene;
 
-      car.scale.set(0.14, 0.14, 0.14);
+      car.scale.set(0.2, 0.2, 0.2);
       car.position.set(-3, 0.75, -4);
       car.position.copy(startPosition);
       car.traverse((child)=>{
@@ -580,13 +644,15 @@ function loadCar() {
   );
 }
 
-
-const buffervectorCar = new THREE.Vector3();
+const buffervectorCarMove = new THREE.Vector3();
+const buffervectorCar = new THREE.Vector3(0,1,0);
 const buffervectorCam = new THREE.Vector3();
-const right = new THREE.Vector3();
+const forward = new THREE.Vector3();
+const right = new THREE.Vector3(-forward.z, 0, forward.x);
 const camOffset = new THREE.Vector3();
 const positionLerp = new THREE.Vector3();
-const forward = new THREE.Vector3();
+const pushDirUpdateCar = new THREE.Vector3();
+const driftVector = new THREE.Vector3();
 //Physik
 function updateCar(delta) {
   if (!car) return;
@@ -599,19 +665,23 @@ function updateCar(delta) {
   const isDrifting = keys['shift'];
 
   forward.set(0, 0, -1);
-  forward.applyAxisAngle(buffervectorCar.set(0,1,0), direction);
+  forward.applyAxisAngle(buffervectorCar/*.set(0,1,0)*/, direction);
 
-  right.set(-forward.z, 0, forward.x);
+  //right.set(-forward.z, 0, forward.x);
 
   const speed = velocity.length();
 
   // Beschleunigung
   if (keys['w']) {
-    velocity.add(forward.clone().multiplyScalar(accel * delta));
+    buffervectorCarMove.copy(forward);
+    buffervectorCarMove.multiplyScalar(accel * delta);
+    velocity.add(buffervectorCarMove);
   }
 
   if (keys['s']) {
-    velocity.add(forward.clone().multiplyScalar(-reverseAccel * delta));
+    buffervectorCarMove.copy(forward);
+    buffervectorCarMove.multiplyScalar(-reverseAccel * delta);
+    velocity.add(buffervectorCarMove);
   }
 
    const driftTurnMultiplier = isDrifting ? 1.7 : 1;
@@ -622,33 +692,46 @@ function updateCar(delta) {
   }
 
   if (isDrifting && speed > 0.05 && (keys['a'] || keys['d'])) {
-    driftCharge += 0.002;
+    driftCharge += delta/250;
     driftCharge = Math.min(driftCharge, 1);
   //seitliche Driftkraft
   if (keys['a']) {
-    velocity.add(right.clone().multiplyScalar(0.015 * speed * delta));
+    buffervectorCarMove.copy(right);
+    buffervectorCarMove.multiplyScalar(0.015 * speed * delta);
+    velocity.add(buffervectorCarMove);
   }
   if (keys['d']) {
-    velocity.add(right.clone().multiplyScalar(-0.015 * speed * delta));
+    buffervectorCarMove.copy(right);
+    buffervectorCarMove.multiplyScalar(-0.015 * speed * delta);
+    velocity.add(buffervectorCarMove);
   }
 
   // Drift + Grip
   const forwardSpeed = velocity.dot(forward);
   const sideSpeed = velocity.dot(right);
 
-  const driftFactor = 0.9;   // weniger = mehr Drift
+  const driftFactor = 0.7;   // weniger = weniger Drift
 
-  velocity.copy(forward.clone().multiplyScalar(forwardSpeed));
+  driftVector.copy(forward);
+  driftVector.multiplyScalar(forwardSpeed);
 
-  velocity.add(right.clone().multiplyScalar(sideSpeed * driftFactor));
+  buffervectorCarMove.copy(right);
+  buffervectorCarMove.multiplyScalar(sideSpeed * driftFactor);
+
+  driftVector.add(buffervectorCarMove);
+
+  velocity.x += (driftVector.x - velocity.x) * 0.2;
+  velocity.y += (driftVector.y - velocity.y) * 0.2;
+  velocity.z += (driftVector.z - velocity.z) * 0.2;
 
 } else {
   // normaler Grip
   const forwardSpeed = velocity.dot(forward);
-  velocity.copy(forward.clone().multiplyScalar(forwardSpeed));
+  velocity.copy(forward);
+  velocity.multiplyScalar(forwardSpeed);
 }
-if (!isDrifting && driftCharge > 0.2) {
-  boost = driftCharge * 0.007;
+if (!isDrifting && driftCharge > 0.1) {
+  boost = driftCharge * 0.02;
   driftCharge = 0;
 }
 
@@ -657,7 +740,10 @@ if (!isDrifting && driftCharge > 0.2) {
   boost *= Math.pow(0.92, delta);
 
   // Bewegung
-  velocity.add(forward.clone().multiplyScalar(boost));
+  buffervectorCarMove.copy(forward)
+  buffervectorCarMove.multiplyScalar(boost);
+  velocity.add(buffervectorCarMove);
+
   car.position.add(velocity);
   
   // Y fix
@@ -671,18 +757,17 @@ if (!isDrifting && driftCharge > 0.2) {
 
   if (minDist > trackWidth - carRadius) {
 
-    const pushDir = new THREE.Vector3();
-    pushDir.subVectors(car.position, nearestPoint);
-    pushDir.normalize();
+    pushDirUpdateCar.subVectors(car.position, nearestPoint);
+    pushDirUpdateCar.normalize();
 
     const allowedDist = trackWidth - carRadius;
 
-    const correction = pushDir.multiplyScalar(minDist - allowedDist);
+    const correction = pushDirUpdateCar.multiplyScalar(minDist - allowedDist);
 
     car.position.sub(correction);
 
     // Geschwindigkeit abbremsen
-    velocity.projectOnPlane(pushDir);
+    velocity.projectOnPlane(pushDirUpdateCar);
 
     velocity.multiplyScalar(0.5);
   }
@@ -730,6 +815,21 @@ function updateUI() {
   document.getElementById("time").innerText = t.toFixed(2);
 }
 
+function setupControlsUI() {
+  const el = document.getElementById("controlsUI");
+
+  el.innerHTML = `
+    <b>Steuerung</b><br><br>
+    W: Vorwärts<br>
+    A: Links<br>
+    S: Rückwärts<br>
+    D: Rechts<br>
+    Shift: Drift
+  `;
+
+  el.style.display = "block";
+}
+
 //Bestzeit schreiben
 function BestzeitSchreiben(text){
   context.fillStyle = "black";
@@ -759,7 +859,7 @@ function animate() {
   requestAnimationFrame(animate);
 
   const now = performance.now();
-  const delta = (now - lastTime) / 16.666; // 60fps norm
+  const delta = Math.min((now-lastTime)/16.666,2); // 60fps norm
   lastTime = now;
 
   if (started) {
@@ -782,9 +882,12 @@ document.getElementById("startBtn").onclick = () => {
 
   started = true;
   startTime = performance.now();
+  
 
   document.getElementById("menu").style.display = "none";
   document.getElementById("ui").style.display = "block";
+
+  setupControlsUI();
 };
 </script>
 </body>
